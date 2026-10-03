@@ -1,0 +1,198 @@
+import base64
+from typing import Any
+
+from synapse.api.errors import HttpResponseException
+from twisted.internet import defer, task
+from twisted.trial import unittest
+
+from unit_tests.fake_internals import FakeInternals
+from unit_tests.fakes import FakeModuleApi, run
+from unit_tests.test_sealer import open_blob
+from zuno_push.ringer import Ringer
+from zuno_push.sender import SygnalSender
+from zuno_push.store import CallRow, PushStore, RingRow
+
+KEY = bytes(range(32))
+KEY_B64 = base64.b64encode(KEY).decode()
+NOW = 1_790_000_000_000
+
+
+class RingerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.clock = task.Clock()
+        self.clock.advance(NOW / 1000)
+        self.api = FakeModuleApi(self.clock)
+        self.store = PushStore(self.api)
+        sender = SygnalSender(
+            self.api, FakeInternals(self.api), "http://sygnal/_matrix/push/v1/notify"
+        )
+        self.ringer = Ringer(self.api, self.store, sender)
+
+    def call(
+        self,
+        call_id: str,
+        received_ts: int,
+        *rings: RingRow,
+        cname: str = "Alice",
+        rname: str = "Design",
+    ) -> None:
+        row = CallRow("!r:test", call_id, "@alice:test", "video", received_ts, cname, rname)
+        run(self.store.create_call_with_rings(row, list(rings), self.api.get_current_time_msec()))
+
+    def register(self, user_id: str, device_id: str, pushkey: str) -> None:
+        run(
+            self.store.upsert_voip(user_id, device_id, "im.zuno.chat.ios.voip", pushkey, 9, KEY_B64)
+        )
+
+    def state(self, user_id: str, device_id: str) -> tuple:
+        return run(self.store.ring_and_call("!r:test", "c1", user_id, device_id))[0]
+
+    def sent_device(self) -> dict:
+        return self.api.http_client.requests[0][1]["notification"]["devices"][0]
+
+    def sent_blob(self, key: bytes = KEY) -> tuple[int, int, dict]:
+        blob = self.sent_device()["data"]["default_payload"]["z"]
+        return open_blob(key, base64.b64decode(blob))
+
+    def test_pending_ring_is_sealed_and_sent(self) -> None:
+        self.register("@bob:test", "B", "pk-b")
+        self.call("c1", NOW - 1_000, RingRow("@bob:test", "B", "pending", False))
+        run(self.ringer.drive())
+        self.assertEqual(self.state("@bob:test", "B"), ("sent", NOW))
+        kid, x, plain = self.sent_blob()
+        self.assertEqual(kid, 9)
+        self.assertEqual(x, NOW // 1000 + 45)
+        self.assertEqual(
+            plain,
+            {
+                "room": "!r:test",
+                "call": "c1",
+                "caller": "@alice:test",
+                "cname": "Alice",
+                "rname": "Design",
+                "kind": "video",
+                "ts": NOW,
+                "rts": NOW - 1_000,
+            },
+        )
+        self.assertEqual(run(self.store.get_device("@bob:test", "B")).last_result, "sent")
+
+    def test_dm_rings_carry_an_empty_room_name(self) -> None:
+        self.register("@bob:test", "B", "pk-b")
+        self.call("c1", NOW, RingRow("@bob:test", "B", "pending", True))
+        run(self.ringer.drive())
+        self.assertEqual(self.sent_blob()[2]["rname"], "")
+
+    def test_device_without_token_becomes_no_token(self) -> None:
+        self.call("c1", NOW, RingRow("@bob:test", "B", "pending", False))
+        run(self.ringer.drive())
+        self.assertEqual(self.state("@bob:test", "B"), ("no_token", NOW))
+        self.assertEqual(self.api.http_client.requests, [])
+
+    def test_rejected_pushkey_fails_the_ring_and_clears_the_token(self) -> None:
+        self.register("@bob:test", "B", "pk-b")
+        self.call("c1", NOW, RingRow("@bob:test", "B", "pending", False))
+        self.api.http_client.responses.append(lambda: {"rejected": ["pk-b"]})
+        run(self.ringer.drive())
+        self.assertEqual(self.state("@bob:test", "B")[0], "failed")
+        self.assertFalse(run(self.store.get_device("@bob:test", "B")).has_voip)
+
+    def test_stale_pending_rows_expire_instead_of_ringing(self) -> None:
+        self.register("@bob:test", "B", "pk-b")
+        self.call("c1", NOW - 31_000, RingRow("@bob:test", "B", "pending", False))
+        run(self.ringer.drive())
+        self.assertEqual(self.state("@bob:test", "B"), ("failed", NOW))
+        self.assertEqual(self.api.http_client.requests, [])
+
+    def test_restart_redrives_pending_rows(self) -> None:
+        self.register("@bob:test", "B", "pk-b")
+        self.call("c1", NOW - 5_000, RingRow("@bob:test", "B", "pending", False))
+        fresh = Ringer(
+            self.api,
+            self.store,
+            SygnalSender(self.api, FakeInternals(self.api), "http://s/_matrix/push/v1/notify"),
+        )
+        run(fresh.drive())
+        self.assertEqual(self.state("@bob:test", "B")[0], "sent")
+
+    def test_group_sends_in_batches_of_eight_and_a_failure_stays_local(self) -> None:
+        rings = []
+        for i in range(10):
+            self.register(f"@u{i}:test", "P", f"pk{i}")
+            rings.append(RingRow(f"@u{i}:test", "P", "pending", False))
+        self.call("c1", NOW, *rings)
+        gates: list[defer.Deferred] = []
+
+        def slow() -> Any:
+            d: defer.Deferred = defer.Deferred()
+            gates.append(d)
+            return d
+
+        self.api.http_client.responses.extend([slow] * 10)
+        d = defer.ensureDeferred(self.ringer.drive())
+        self.assertEqual(len(gates), 8)
+        for gate in gates[:7]:
+            gate.callback({"rejected": []})
+
+        gates[7].errback(HttpResponseException(400, "bad", b""))
+        self.assertEqual(len(gates), 10)
+        gates[8].callback({"rejected": []})
+        gates[9].callback({"rejected": []})
+        self.successResultOf(d)
+        states = [
+            r[0]
+            for r in self.api.conn.execute("SELECT state FROM zuno_push_rings ORDER BY user_id")
+        ]
+        self.assertEqual(states.count("sent"), 9)
+        self.assertEqual(states.count("failed"), 1)
+
+    def test_sygnal_outage_never_marks_the_device_failing(self) -> None:
+        self.register("@bob:test", "B", "pk-b")
+
+        def refuse() -> Any:
+            raise ConnectionRefusedError()
+
+        for i in range(4):
+            self.call(f"c{i}", NOW, RingRow("@bob:test", "B", "pending", False))
+            self.api.http_client.responses.extend([refuse, refuse])
+            d = defer.ensureDeferred(self.ringer.drive())
+            self.clock.advance(1)
+            self.successResultOf(d)
+        device = run(self.store.get_device("@bob:test", "B"))
+        self.assertEqual(
+            (device.fail_count, device.voip_failing, device.last_result), (0, False, "failed")
+        )
+        states = {r[0] for r in self.api.conn.execute("SELECT state FROM zuno_push_rings")}
+        self.assertEqual(states, {"failed"})
+
+    def test_token_rotated_between_evaluation_and_send(self) -> None:
+        self.register("@bob:test", "B", "pk-old")
+        self.call("c1", NOW, RingRow("@bob:test", "B", "pending", False))
+        new_key = bytes(range(100, 132))
+        run(
+            self.store.upsert_voip(
+                "@bob:test",
+                "B",
+                "im.zuno.chat.ios.voip",
+                "pk-new",
+                10,
+                base64.b64encode(new_key).decode(),
+            )
+        )
+        run(self.ringer.drive())
+        self.assertEqual(self.sent_device()["pushkey"], "pk-new")
+        kid, _, plain = self.sent_blob(new_key)
+        self.assertEqual((kid, plain["call"]), (10, "c1"))
+        self.assertEqual(run(self.store.get_device("@bob:test", "B")).last_result, "sent")
+
+    def test_kick_while_driving_runs_again(self) -> None:
+        self.register("@bob:test", "B", "pk-b")
+        self.call("c1", NOW, RingRow("@bob:test", "B", "pending", False))
+        gate: defer.Deferred = defer.Deferred()
+        self.api.http_client.responses.extend([lambda: gate])
+        self.ringer.kick()
+        self.register("@carol:test", "C", "pk-c")
+        self.call("c2", NOW, RingRow("@carol:test", "C", "pending", False))
+        self.ringer.kick()
+        gate.callback({"rejected": []})
+        self.assertEqual(len(self.api.http_client.requests), 2)

@@ -1,0 +1,10 @@
+.venv
+.contract
+.git
+.superpowers
+unit_tests
+contract_tests
+_trial_temp
+__pycache__
+*.egg-info
+.ruff_cache

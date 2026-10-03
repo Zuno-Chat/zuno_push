@@ -1,0 +1,12 @@
+.venv/
+.contract/
+_trial_temp/
+__pycache__/
+*.egg-info/
+.ruff_cache/
+dist/
+.claude/
+.superpowers/
+/CLAUDE.md
+/2026-10-02-zuno-push-module.md
+build/

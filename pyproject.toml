@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zuno-push"
+version = "0.1.0"
+description = "Zuno iOS push and call ring module for Synapse"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+requires-python = ">=3.10"
+# matrix-synapse is not a dependency: the module runs inside Synapse's own
+# environment, which supplies Twisted, cryptography and prometheus_client.
+dependencies = []
+
+[project.optional-dependencies]
+# Move the pin together with contract_tests/SYNAPSE_VERSION,
+# TESTED_SYNAPSE_VERSION in src/module.py and the docker repo's
+# synapse/Dockerfile FROM.
+dev = [
+  "matrix-synapse[test]==1.162.0",
+  "ruff>=0.6",
+]
+
+# src/ holds the package's files and is installed as zuno_push, by the wheel
+# and by the editable install alike.
+[tool.setuptools]
+packages = ["zuno_push"]
+package-dir = { zuno_push = "src" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["zuno_push", "unit_tests"]
+known-third-party = ["synapse", "tests"]
