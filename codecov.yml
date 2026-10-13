@@ -1,0 +1,7 @@
+# One unit upload and two contract uploads (SQLite, Postgres) per commit; wait
+# for all three so statuses and comments never report a partial merge.
+codecov:
+  notify:
+    after_n_builds: 3
+comment:
+  after_n_builds: 3

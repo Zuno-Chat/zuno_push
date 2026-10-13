@@ -14,9 +14,15 @@ venv: $(VENV)/.ok
 test: venv
 	$(PY) -m twisted.trial unit_tests
 
+# Unit tests under coverage.py; writes .coverage and prints the per-file table.
+coverage: venv
+	$(PY) -m coverage run -m twisted.trial unit_tests
+	$(PY) -m coverage report --show-missing
+
 # Synapse's own test harness at the pinned tag; the first run clones it and
 # builds .contract/venv-<version>. Set SYNAPSE_POSTGRES=1 and the
-# SYNAPSE_POSTGRES_* variables for the Postgres run.
+# SYNAPSE_POSTGRES_* variables for the Postgres run, and
+# ZUNO_CONTRACT_COVERAGE=1 to also write coverage-contract.xml.
 contract:
 	scripts/contract-tests.sh
 
@@ -29,4 +35,4 @@ fmt: venv
 	$(VENV)/bin/ruff format $(SRC)
 	$(VENV)/bin/ruff check --fix $(SRC)
 
-.PHONY: venv test contract check fmt
+.PHONY: venv test coverage contract check fmt

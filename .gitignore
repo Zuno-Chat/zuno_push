@@ -4,6 +4,9 @@ _trial_temp/
 __pycache__/
 *.egg-info/
 .ruff_cache/
+.coverage
+.coverage.*
+coverage*.xml
 dist/
 .claude/
 .superpowers/

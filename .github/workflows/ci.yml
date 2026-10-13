@@ -1,5 +1,7 @@
 # Same checks as `make check` plus the contract tests on SQLite and Postgres.
 # Actions are pinned to commit SHAs; the comment is the tag that SHA was.
+# Each suite uploads its coverage to Codecov (flags unit and contract), which
+# merges them: only the contract tests reach src/internals.py.
 name: CI
 
 on:
@@ -29,7 +31,14 @@ jobs:
       - run: python -m pip install -e '.[dev]'
       - run: ruff format --check src unit_tests contract_tests
       - run: ruff check src unit_tests contract_tests
-      - run: python -m twisted.trial unit_tests
+      - run: python -m coverage run -m twisted.trial unit_tests
+      - run: python -m coverage xml
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          disable_search: true
+          flags: unit
 
   contract:
     runs-on: ubuntu-latest
@@ -53,11 +62,20 @@ jobs:
         with:
           python-version: "3.13"
       - name: Contract tests
+        env:
+          ZUNO_CONTRACT_COVERAGE: "1"
         run: |
           if [ "${{ matrix.database }}" = postgres ]; then
             export SYNAPSE_POSTGRES=1 SYNAPSE_POSTGRES_HOST=127.0.0.1 SYNAPSE_POSTGRES_PORT=5432 SYNAPSE_POSTGRES_USER=postgres
           fi
           scripts/contract-tests.sh
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-contract.xml
+          disable_search: true
+          flags: contract
+          name: contract-${{ matrix.database }}
 
   # A v* tag publishes ghcr.io/zuno-chat/zuno-push-wheel:<tag> for the docker
   # repo's Synapse image. That repo reads it with its own GITHUB_TOKEN once

@@ -29,4 +29,12 @@ cd "$SRC"
 if [ "$#" -eq 0 ]; then
   set -- tests.zuno_push_contract
 fi
-exec "$VENV/bin/python" -m twisted.trial "$@"
+if [ -z "${ZUNO_CONTRACT_COVERAGE:-}" ]; then
+  exec "$VENV/bin/python" -m twisted.trial "$@"
+fi
+
+"$VENV/bin/python" -c 'import coverage' 2>/dev/null || "$VENV/bin/pip" install --quiet 'coverage[toml]>=7'
+export COVERAGE_RCFILE="$ROOT/pyproject.toml" COVERAGE_FILE="$ROOT/.coverage.contract"
+"$VENV/bin/python" -m coverage run -m twisted.trial "$@"
+cd "$ROOT"
+exec "$VENV/bin/python" -m coverage xml -o coverage-contract.xml

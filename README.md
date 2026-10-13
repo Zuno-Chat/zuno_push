@@ -1,5 +1,7 @@
 # zuno_push
 
+[![codecov](https://codecov.io/gh/Zuno-Chat/zuno_push/graph/badge.svg)](https://codecov.io/gh/Zuno-Chat/zuno_push)
+
 Synapse module that rings a closed Zuno iOS app through stock Sygnal VoIP pushes, and serves the Notification Service Extension's credential, fetch, ring-status and catch-up API. Requests carry the user's Matrix access token, or for the NSE routes a `ZunoNotify` credential the module mints. Endpoints live under `/_synapse/client/zuno/push/v1/`, and every module reply carries `X-Zuno-Push: 1`.
 
 | Route | Purpose |
@@ -35,6 +37,7 @@ modules:
 ## Develop
 
 - `make check` runs ruff and the unit tests.
+- `make coverage` runs the unit tests under coverage.py. CI uploads unit and contract coverage to Codecov, and only the contract tests reach `src/internals.py`.
 - `make contract` runs the contract tests inside Synapse's own test harness at the pinned version; set `SYNAPSE_POSTGRES=1` and the `SYNAPSE_POSTGRES_*` variables for the Postgres run.
 - Run both suites before moving the Synapse pin, and move it in `contract_tests/SYNAPSE_VERSION`, `src/module.py` and `pyproject.toml` together.
 
