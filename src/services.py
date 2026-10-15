@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 from synapse.module_api import ModuleApi
 
-from zuno_push.canary import Canary
 from zuno_push.catchup import CatchUp
 from zuno_push.config import ZunoPushConfig
 from zuno_push.credential import CredentialAuth
@@ -33,7 +32,6 @@ class Services:
     ringer: Ringer
     poller: DeltaPoller
     janitor: Janitor
-    canary: Canary | None
     credentials: CredentialAuth
     scope: NseScope
     catchup: CatchUp
@@ -61,7 +59,6 @@ def build_services(api: ModuleApi, config: ZunoPushConfig, internals: Internals)
         ringer=ringer,
         poller=DeltaPoller(api, internals, store, rules, ringer.kick),
         janitor=Janitor(api, internals, store),
-        canary=Canary(api, internals, store, sender, config.canary) if config.canary else None,
         credentials=CredentialAuth(api, store, internals),
         scope=scope,
         catchup=CatchUp(api, internals, store, scope),

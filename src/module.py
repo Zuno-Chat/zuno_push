@@ -122,7 +122,3 @@ class ZunoPush:
             services.poller.tick, POLL_INTERVAL_MS, desc="zuno_push_poll"
         )
         services.ringer.kick()
-        if services.canary is not None:
-            self._api.looping_background_call(
-                services.canary.run, services.config.canary.interval_ms, desc="zuno_push_canary"
-            )

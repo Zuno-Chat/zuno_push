@@ -16,6 +16,7 @@ from zuno_push.store import DeviceRow, PushStore, RingRow
 logger = logging.getLogger("zuno_push")
 
 FRESH_MS = 30_000
+MAX_CALLS_PER_EVENT = 4
 STATE_TIMEOUT_S = 2.0
 ROOM_TYPES = [
     ("m.room.create", ""),
@@ -63,13 +64,26 @@ def invite_shaped(call: CallStart, encrypted: bool) -> dict[str, Any]:
     }
 
 
-def membership_call_ids(content: Any) -> set[str]:
+def call_memberships(content: Any) -> list[tuple[str, str]]:
     raw = content.get("memberships") if isinstance(content, Mapping) else None
     if not isinstance(raw, (list, tuple)):
-        return set()
-    return {
-        m["call_id"] for m in raw if isinstance(m, Mapping) and isinstance(m.get("call_id"), str)
-    }
+        return []
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for membership in raw:
+        if not isinstance(membership, Mapping):
+            continue
+        call_id = membership.get("call_id")
+        kind = membership.get("kind")
+        if not isinstance(call_id, str) or not call_id or len(call_id) > 255:
+            continue
+        if not isinstance(kind, str) or call_id in seen:
+            continue
+        seen.add(call_id)
+        out.append((call_id, kind))
+        if len(out) == MAX_CALLS_PER_EVENT:
+            break
+    return out
 
 
 class RingRules:
@@ -88,19 +102,15 @@ class RingRules:
         self._max_targets = max_targets
 
     async def evaluate(self, call: CallStart, now: int) -> Evaluation:
-        state = await self._room_state(call.room_id)
-        rname = ""
-        if state is not None:
-            rname = room_title(
-                state.get(("m.room.name", "")), state.get(("m.room.canonical_alias", ""))
-            )
+        state = await self._internals.within(
+            STATE_TIMEOUT_S, self._api.get_room_state, call.room_id, ROOM_TYPES
+        )
+        rname = room_title(
+            state.get(("m.room.name", "")), state.get(("m.room.canonical_alias", ""))
+        )
         cname = await self._caller_name(call)
-        try:
-            users = await self._internals.local_joined_users(call.room_id)
-            devices = await self._store.voip_devices_for_users(users)
-        except Exception as e:
-            logger.warning("zuno_push: ring targets unavailable: %s", type(e).__name__)
-            return Evaluation(cname, rname, [])
+        users = await self._internals.local_joined_users(call.room_id)
+        devices = await self._store.voip_devices_for_users(users)
         by_user: dict[str, list[DeviceRow]] = {}
         for device in devices:
             by_user.setdefault(device.user_id, []).append(device)
@@ -141,15 +151,6 @@ class RingRules:
                 rows.append(RingRow(device.user_id, device.device_id, ring_state, dm))
         return Evaluation(cname, rname, rows)
 
-    async def _room_state(self, room_id: str) -> StateMap | None:
-        try:
-            return await self._internals.within(
-                STATE_TIMEOUT_S, self._api.get_room_state, room_id, ROOM_TYPES
-            )
-        except Exception as e:
-            logger.warning("zuno_push: room state unavailable: %s", type(e).__name__)
-            return None
-
     async def _caller_name(self, call: CallStart) -> str:
         try:
             state = await self._internals.within(
@@ -175,10 +176,8 @@ class RingRules:
             logger.warning("zuno_push: member state unavailable: %s", type(e).__name__)
             return {}
 
-    async def _context(self, call: CallStart, state: Any) -> dict[str, Any]:
+    async def _context(self, call: CallStart, state: StateMap) -> dict[str, Any]:
         context: dict[str, Any] = {"required": None, "sender_level": None, "joined": 2}
-        if state is None:
-            return context
         try:
             context["required"] = self._internals.call_member_level(state)
         except Exception as e:
@@ -203,9 +202,9 @@ class RingRules:
         context: Mapping[str, Any],
     ) -> str | None:
         call_member = members.get(("m.call.member", user))
-        if call_member is not None and call.call_id in membership_call_ids(call_member.content):
+        if call_member is not None and call.call_id in dict(call_memberships(call_member.content)):
             return "live"
-        if state is None or context["required"] is None:
+        if context["required"] is None:
             return "not_allowed"
         try:
             if self._internals.user_level(state, user) < context["required"]:
@@ -273,8 +272,6 @@ class RingRules:
                 return "device_gone"
         except Exception as e:
             logger.warning("zuno_push: device check failed, ringing: %s", type(e).__name__)
-        if device.voip_failing:
-            return "voip_failing"
         return None
 
 

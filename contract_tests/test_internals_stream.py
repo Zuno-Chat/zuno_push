@@ -102,7 +102,7 @@ class StreamContractTests(ContractTestCase):
         def seed(t: Any) -> None:
             for dev in (device, "GONE"):
                 t.execute(
-                    "INSERT INTO zuno_push_devices (user_id, device_id, fail_count) VALUES (?, ?, 0)",
+                    "INSERT INTO zuno_push_devices (user_id, device_id) VALUES (?, ?)",
                     (alice[0], dev),
                 )
 

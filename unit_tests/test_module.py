@@ -33,13 +33,13 @@ class ModuleTests(unittest.TestCase):
         return module
 
     def test_registers_routes_cleanup_and_background_work(self) -> None:
-        module = self.start(canary={"user_id": "@canary:test", "device_id": "C"})
+        module = self.start()
         self.assertEqual(set(self.api.resources), ROUTES)
         self.assertIsNotNone(self.api.on_logged_out)
         self.assertIsNotNone(self.api.on_deactivation)
         self.assertEqual(
             {desc for _, _, desc in self.api.looping},
-            {"zuno_push_janitor", "zuno_push_poll", "zuno_push_canary"},
+            {"zuno_push_janitor", "zuno_push_poll"},
         )
         self.assertEqual({desc: ms for _, ms, desc in self.api.looping}["zuno_push_poll"], 250)
         self.assertTrue(
@@ -95,7 +95,7 @@ class ModuleTests(unittest.TestCase):
         self.api.conn.execute("INSERT INTO zuno_push_schema VALUES ('X', 99)")
         self.api.conn.commit()
         module = self.start()
-        self.assertTrue(module.services.gate.started)
+        self.assertEqual(self.api.looping, [])
         self.assertFalse(module.services.gate.enabled("health"))
 
     def test_untested_synapse_version_is_logged(self) -> None:

@@ -51,15 +51,14 @@ class Ringer:
                     if self._again:
                         continue
                     break
-                for start in range(0, len(rows), BATCH):
-                    batch = rows[start : start + BATCH]
-                    attempted.update(r.key for r in batch)
-                    await make_deferred_yieldable(
-                        defer.gatherResults(
-                            [run_in_background(self._send_one, r) for r in batch],
-                            consumeErrors=True,
-                        )
+                batch = rows[:BATCH]
+                attempted.update(r.key for r in batch)
+                await make_deferred_yieldable(
+                    defer.gatherResults(
+                        [run_in_background(self._send_one, r) for r in batch],
+                        consumeErrors=True,
                     )
+                )
         except Exception as e:
             logger.warning("zuno_push: ring drive failed: %s", type(e).__name__)
         finally:

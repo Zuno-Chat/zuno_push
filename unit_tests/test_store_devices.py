@@ -15,9 +15,7 @@ class DeviceRegistryTests(unittest.TestCase):
         run(self.store.upsert_voip("@a:test", "A", "im.zuno.chat.ios.voip", "pk1", 7, KEY))
         row = run(self.store.get_device("@a:test", "A"))
         self.assertTrue(row.has_voip)
-        self.assertEqual(
-            (row.voip_pushkey, row.kid, row.voip_key, row.fail_count), ("pk1", 7, KEY, 0)
-        )
+        self.assertEqual((row.voip_pushkey, row.kid, row.voip_key), ("pk1", 7, KEY))
 
     def test_same_pushkey_moves_to_the_new_device(self) -> None:
         run(self.store.upsert_voip("@a:test", "OLD", "app", "pk", 1, KEY))
@@ -28,39 +26,18 @@ class DeviceRegistryTests(unittest.TestCase):
         self.assertEqual(old.cred_hash, "h1")
         self.assertEqual(run(self.store.get_device("@a:test", "NEW")).kid, 2)
 
-    def test_reregistration_resets_failures(self) -> None:
-        run(self.store.upsert_voip("@a:test", "A", "app", "pk", 1, KEY))
-        for _ in range(3):
-            run(self.store.record_send("@a:test", "A", "pk", "failed", 5))
-        self.assertTrue(run(self.store.get_device("@a:test", "A")).voip_failing)
-        run(self.store.upsert_voip("@a:test", "A", "app", "pk", 1, KEY))
-        row = run(self.store.get_device("@a:test", "A"))
-        self.assertEqual((row.fail_count, row.first_fail_ts), (0, None))
-
     def test_send_results(self) -> None:
         run(self.store.upsert_voip("@a:test", "A", "app", "pk", 1, KEY))
-        run(self.store.record_send("@a:test", "A", "pk", "failed", 5))
-        run(self.store.record_send("@a:test", "A", "pk", "failed", 9))
+        for _ in range(5):
+            run(self.store.record_send("@a:test", "A", "pk", "error", 9))
         row = run(self.store.get_device("@a:test", "A"))
-        self.assertEqual(
-            (row.fail_count, row.first_fail_ts, row.last_result, row.last_ts), (2, 5, "failed", 9)
-        )
+        self.assertEqual((row.has_voip, row.last_result, row.last_ts), (True, "failed", 9))
         run(self.store.record_send("@a:test", "A", "pk", "sent", 12))
         row = run(self.store.get_device("@a:test", "A"))
-        self.assertEqual((row.fail_count, row.last_result, row.last_ts), (0, "sent", 12))
+        self.assertEqual((row.last_result, row.last_ts), ("sent", 12))
         run(self.store.record_send("@a:test", "A", "pk", "rejected", 15))
         row = run(self.store.get_device("@a:test", "A"))
         self.assertEqual((row.has_voip, row.last_result), (False, "rejected"))
-
-    def test_module_side_errors_do_not_count_as_failures(self) -> None:
-        run(self.store.upsert_voip("@a:test", "A", "app", "pk", 1, KEY))
-        for _ in range(5):
-            run(self.store.record_send("@a:test", "A", "pk", "error", 7))
-        row = run(self.store.get_device("@a:test", "A"))
-        self.assertEqual(
-            (row.fail_count, row.last_result, row.last_ts, row.voip_failing),
-            (0, "failed", 7, False),
-        )
 
     def test_send_result_for_a_replaced_token_is_ignored(self) -> None:
         run(self.store.upsert_voip("@a:test", "A", "app", "new", 1, KEY))

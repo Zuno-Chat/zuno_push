@@ -7,17 +7,13 @@ from typing import Any
 from synapse.module_api import ModuleApi
 
 PREVIOUS_CREDENTIAL_MS = 10 * 60 * 1000
-FAILING_AFTER = 3
 
 _DEVICE_COLUMNS = (
-    "user_id, device_id, voip_app_id, voip_pushkey, kid, voip_key, fail_count,"
-    " first_fail_ts, last_result, last_ts, cred_hash, cred_expires, prev_cred_hash,"
-    " prev_cred_until, last_fetch_ts, floor_so, floor_rs"
+    "user_id, device_id, voip_app_id, voip_pushkey, kid, voip_key, last_result, last_ts,"
+    " cred_hash, cred_expires, prev_cred_hash, prev_cred_until, last_fetch_ts, floor_so,"
+    " floor_rs"
 )
-_CLEAR_VOIP = (
-    "voip_app_id = NULL, voip_pushkey = NULL, kid = NULL, voip_key = NULL,"
-    " fail_count = 0, first_fail_ts = NULL"
-)
+_CLEAR_VOIP = "voip_app_id = NULL, voip_pushkey = NULL, kid = NULL, voip_key = NULL"
 
 
 @dataclass(frozen=True)
@@ -28,8 +24,6 @@ class DeviceRow:
     voip_pushkey: str | None
     kid: int | None
     voip_key: str | None
-    fail_count: int
-    first_fail_ts: int | None
     last_result: str | None
     last_ts: int | None
     cred_hash: str | None
@@ -43,10 +37,6 @@ class DeviceRow:
     @property
     def has_voip(self) -> bool:
         return self.voip_pushkey is not None
-
-    @property
-    def voip_failing(self) -> bool:
-        return self.fail_count >= FAILING_AFTER
 
 
 @dataclass(frozen=True)
@@ -121,12 +111,11 @@ class PushStore:
             )
             t.execute(
                 "INSERT INTO zuno_push_devices"
-                " (user_id, device_id, voip_app_id, voip_pushkey, kid, voip_key, fail_count)"
-                " VALUES (?, ?, ?, ?, ?, ?, 0)"
+                " (user_id, device_id, voip_app_id, voip_pushkey, kid, voip_key)"
+                " VALUES (?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT (user_id, device_id) DO UPDATE SET"
                 " voip_app_id = excluded.voip_app_id, voip_pushkey = excluded.voip_pushkey,"
-                " kid = excluded.kid, voip_key = excluded.voip_key,"
-                " fail_count = 0, first_fail_ts = NULL",
+                " kid = excluded.kid, voip_key = excluded.voip_key",
                 (user_id, device_id, app_id, pushkey, kid, key_b64),
             )
 
@@ -179,20 +168,7 @@ class PushStore:
         self, user_id: str, device_id: str, pushkey: str, result: str, now: int
     ) -> None:
         def txn(t: Any) -> None:
-            if result == "sent":
-                t.execute(
-                    "UPDATE zuno_push_devices SET fail_count = 0, first_fail_ts = NULL,"
-                    " last_result = 'sent', last_ts = ?"
-                    " WHERE user_id = ? AND device_id = ? AND voip_pushkey = ?",
-                    (now, user_id, device_id, pushkey),
-                )
-            elif result == "error":
-                t.execute(
-                    "UPDATE zuno_push_devices SET last_result = 'failed', last_ts = ?"
-                    " WHERE user_id = ? AND device_id = ? AND voip_pushkey = ?",
-                    (now, user_id, device_id, pushkey),
-                )
-            elif result == "rejected":
+            if result == "rejected":
                 t.execute(
                     f"UPDATE zuno_push_devices SET {_CLEAR_VOIP},"
                     " last_result = 'rejected', last_ts = ?"
@@ -201,11 +177,9 @@ class PushStore:
                 )
             else:
                 t.execute(
-                    "UPDATE zuno_push_devices SET fail_count = fail_count + 1,"
-                    " first_fail_ts = COALESCE(first_fail_ts, ?),"
-                    " last_result = 'failed', last_ts = ?"
+                    "UPDATE zuno_push_devices SET last_result = ?, last_ts = ?"
                     " WHERE user_id = ? AND device_id = ? AND voip_pushkey = ?",
-                    (now, now, user_id, device_id, pushkey),
+                    ("sent" if result == "sent" else "failed", now, user_id, device_id, pushkey),
                 )
 
         await self._run("record_send", txn)
@@ -222,8 +196,8 @@ class PushStore:
     ) -> None:
         def txn(t: Any) -> None:
             t.execute(
-                "INSERT INTO zuno_push_devices (user_id, device_id, fail_count)"
-                " VALUES (?, ?, 0) ON CONFLICT (user_id, device_id) DO NOTHING",
+                "INSERT INTO zuno_push_devices (user_id, device_id)"
+                " VALUES (?, ?) ON CONFLICT (user_id, device_id) DO NOTHING",
                 (user_id, device_id),
             )
             t.execute(
@@ -386,8 +360,8 @@ class PushStore:
                 " JOIN zuno_push_calls c ON c.room_id = r.room_id AND c.call_id = r.call_id"
                 " LEFT JOIN zuno_push_devices d"
                 "   ON d.user_id = r.user_id AND d.device_id = r.device_id"
-                " WHERE r.state = 'pending' AND c.received_ts >= ?"
-                " ORDER BY c.received_ts, r.room_id, r.call_id, r.user_id, r.device_id"
+                " WHERE r.state = 'pending' AND c.ended = 0 AND c.received_ts >= ?"
+                " ORDER BY c.received_ts DESC, r.room_id, r.call_id, r.user_id, r.device_id"
                 " LIMIT ?",
                 (received_after, limit),
             )
@@ -458,11 +432,6 @@ class PushStore:
                 "UPDATE zuno_push_devices SET prev_cred_hash = NULL, prev_cred_until = NULL"
                 " WHERE prev_cred_until IS NOT NULL AND prev_cred_until <= ?",
                 (now,),
-            )
-            t.execute(
-                f"UPDATE zuno_push_devices SET {_CLEAR_VOIP}"
-                " WHERE fail_count >= ? AND first_fail_ts <= ?",
-                (FAILING_AFTER, now - day_ms),
             )
             t.execute(
                 "DELETE FROM zuno_push_devices WHERE voip_pushkey IS NULL"

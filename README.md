@@ -31,7 +31,6 @@ modules:
 ```
 
 - `disabled_features` is the kill switch: any of `ring`, `health`, `test`, `nse` or `catchup` answers 503 `IM.ZUNO.PUSH_DISABLED`.
-- An optional `canary:` block (`user_id`, `device_id`, `interval_hours`) sends a sealed canary ring to one internal device.
 - A broken config disables the module and leaves Synapse running.
 
 ## Develop

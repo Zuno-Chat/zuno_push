@@ -14,10 +14,6 @@ class FeatureGate:
     def __init__(self) -> None:
         self._enabled: dict[str, bool] | None = None
 
-    @property
-    def started(self) -> bool:
-        return self._enabled is not None
-
     def set_ready(self, probe_results: Mapping[str, bool], disabled: Collection[str]) -> None:
         enabled = {f: bool(probe_results.get(f)) and f not in disabled for f in FEATURES}
         enabled["catchup"] = enabled["catchup"] and enabled["nse"]

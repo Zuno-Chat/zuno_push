@@ -31,13 +31,6 @@ TEST_ALERTS = Counter("zuno_push_test_alerts_total", "POST test results", ["resu
 RATE_LIMITED = Counter(
     "zuno_push_rate_limited_total", "Requests or rings refused by a limit", ["limit"]
 )
-CANARY = Counter("zuno_push_canary_total", "Canary runs by result", ["result"])
-CANARY_LAST_SUCCESS = Gauge(
-    "zuno_push_canary_last_success_timestamp_seconds", "Unix time of the last good canary"
-)
-CANARY_SEND_SECONDS = Gauge(
-    "zuno_push_canary_send_seconds", "Duration of the last canary VoIP send"
-)
 FEATURE_ENABLED = Gauge(
     "zuno_push_feature_enabled", "1 when a zuno_push feature is serving", ["feature"]
 )

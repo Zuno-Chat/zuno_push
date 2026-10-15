@@ -134,19 +134,15 @@ class RingRuleTests(RulesTestBase):
             {"algorithm": "m.megolm.v1.aes-sha2"},
         )
 
-    def test_device_gone_and_failing_voip(self) -> None:
+    def test_device_gone(self) -> None:
         self.member("@bob:test", "PHONE")
         self.member("@bob:test", "OLD")
-        self.member("@bob:test", "FLAKY")
         self.internals.devices.discard(("@bob:test", "OLD"))
-        for _ in range(3):
-            run(self.store.record_send("@bob:test", "FLAKY", "pk-@bob:test-FLAKY", "failed", NOW))
         self.assertEqual(
             self.evaluate(),
             {
                 ("@bob:test", "PHONE"): "pending",
                 ("@bob:test", "OLD"): "suppressed:device_gone",
-                ("@bob:test", "FLAKY"): "suppressed:voip_failing",
             },
         )
 
@@ -228,7 +224,7 @@ class FailureModeTests(RulesTestBase):
         self.assertEqual(result.cname, "")
         self.assertEqual([r.state for r in result.rings], ["pending"])
 
-    def test_no_targets_when_membership_is_unavailable(self) -> None:
+    def test_membership_outage_raises_so_the_poller_retries(self) -> None:
         self.member("@bob:test")
         self.internals.fail.add("local_joined_users")
-        self.assertEqual(self.evaluate(), {})
+        self.assertRaises(RuntimeError, self.evaluate)

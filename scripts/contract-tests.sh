@@ -16,7 +16,8 @@ fi
 
 if [ ! -x "$VENV/bin/python" ]; then
   python3 -m venv "$VENV"
-  "$VENV/bin/pip" install --quiet "matrix-synapse[test,redis]==$VERSION" psycopg2-binary
+  # txredisapi 1.6 breaks Synapse's Redis factory (no startedConnecting); recheck on a pin move.
+  "$VENV/bin/pip" install --quiet "matrix-synapse[test,redis]==$VERSION" psycopg2-binary "txredisapi<1.6"
 fi
 
 INSTALLED="$("$VENV/bin/python" -c 'import os, zuno_push; print(os.path.dirname(zuno_push.__file__))' 2>/dev/null || true)"

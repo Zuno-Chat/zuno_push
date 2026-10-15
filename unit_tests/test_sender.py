@@ -66,17 +66,17 @@ class SenderTests(unittest.TestCase):
         d = self.send()
         self.clock.advance(1)
         result = self.successResultOf(d)
-        self.assertEqual((result.outcome, result.status, result.attempts), ("failed", 500, 2))
+        self.assertEqual((result.outcome, result.status, result.attempts), ("error", 500, 2))
 
     def test_no_retry_outside_the_ten_second_window(self) -> None:
         self.api.http_client.responses.append(failing(500))
         result = self.successResultOf(self.send(trigger_ts=self.now - 9_500))
-        self.assertEqual((result.outcome, result.attempts), ("failed", 1))
+        self.assertEqual((result.outcome, result.attempts), ("error", 1))
 
     def test_400_is_not_retried(self) -> None:
         self.api.http_client.responses.append(failing(400))
         result = self.successResultOf(self.send())
-        self.assertEqual((result.outcome, result.attempts), ("failed", 1))
+        self.assertEqual((result.outcome, result.attempts), ("error", 1))
 
     def test_timeout_after_four_seconds_is_never_retried(self) -> None:
         self.api.http_client.responses.append(lambda: defer.Deferred())

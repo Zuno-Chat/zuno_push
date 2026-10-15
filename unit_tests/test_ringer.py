@@ -8,6 +8,7 @@ from twisted.trial import unittest
 from unit_tests.fake_internals import FakeInternals
 from unit_tests.fakes import FakeModuleApi, run
 from unit_tests.test_sealer import open_blob
+from unit_tests.test_sender import failing
 from zuno_push.ringer import Ringer
 from zuno_push.sender import SygnalSender
 from zuno_push.store import CallRow, PushStore, RingRow
@@ -104,6 +105,13 @@ class RingerTests(unittest.TestCase):
         self.assertEqual(self.state("@bob:test", "B"), ("failed", NOW))
         self.assertEqual(self.api.http_client.requests, [])
 
+    def test_a_call_the_caller_already_left_is_not_rung(self) -> None:
+        self.register("@bob:test", "B", "pk-b")
+        self.call("c1", NOW, RingRow("@bob:test", "B", "pending", False))
+        run(self.store.end_calls("!r:test", "@alice:test", []))
+        run(self.ringer.drive())
+        self.assertEqual(self.api.http_client.requests, [])
+
     def test_restart_redrives_pending_rows(self) -> None:
         self.register("@bob:test", "B", "pk-b")
         self.call("c1", NOW - 5_000, RingRow("@bob:test", "B", "pending", False))
@@ -146,22 +154,48 @@ class RingerTests(unittest.TestCase):
         self.assertEqual(states.count("sent"), 9)
         self.assertEqual(states.count("failed"), 1)
 
+    def test_a_new_call_goes_out_before_an_older_group_calls_remaining_rings(self) -> None:
+        rings = []
+        for i in range(10):
+            self.register(f"@u{i}:test", "P", f"pk{i}")
+            rings.append(RingRow(f"@u{i}:test", "P", "pending", False))
+        self.call("c1", NOW - 1_000, *rings)
+        gates: list[defer.Deferred] = []
+
+        def slow() -> Any:
+            d: defer.Deferred = defer.Deferred()
+            gates.append(d)
+            return d
+
+        self.api.http_client.responses.extend([slow] * 8)
+        d = defer.ensureDeferred(self.ringer.drive())
+        self.register("@new:test", "P", "pk-new")
+        self.call("c2", NOW, RingRow("@new:test", "P", "pending", False))
+        for gate in gates:
+            gate.callback({"rejected": []})
+        self.successResultOf(d)
+        pushkeys = [
+            body["notification"]["devices"][0]["pushkey"]
+            for _, body in self.api.http_client.requests
+        ]
+        self.assertEqual(pushkeys[8], "pk-new")
+        self.assertEqual(len(pushkeys), 11)
+
     def test_sygnal_outage_never_marks_the_device_failing(self) -> None:
         self.register("@bob:test", "B", "pk-b")
 
         def refuse() -> Any:
             raise ConnectionRefusedError()
 
-        for i in range(4):
+        outages = [[refuse, refuse], [failing(502)] * 2, [failing(500)] * 2, [failing(400)]]
+        for i, responses in enumerate(outages):
             self.call(f"c{i}", NOW, RingRow("@bob:test", "B", "pending", False))
-            self.api.http_client.responses.extend([refuse, refuse])
+            self.api.http_client.responses.extend(responses)
             d = defer.ensureDeferred(self.ringer.drive())
             self.clock.advance(1)
             self.successResultOf(d)
         device = run(self.store.get_device("@bob:test", "B"))
-        self.assertEqual(
-            (device.fail_count, device.voip_failing, device.last_result), (0, False, "failed")
-        )
+        self.assertEqual((device.has_voip, device.last_result), (True, "failed"))
         states = {r[0] for r in self.api.conn.execute("SELECT state FROM zuno_push_rings")}
         self.assertEqual(states, {"failed"})
 

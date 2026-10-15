@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
-from typing import Any
+from collections.abc import Callable
 
 from synapse.module_api import ModuleApi
 
 from zuno_push import metrics
 from zuno_push.records import Internals
-from zuno_push.rules import CallStart, RingRules
+from zuno_push.rules import CallStart, RingRules, call_memberships
 from zuno_push.store import CallRow, PushStore
 
 logger = logging.getLogger("zuno_push")
@@ -17,30 +16,7 @@ STARTUP_LOOKBACK_MS = 5 * 60_000
 CALL_MEMBER = "m.call.member"
 RING_KINDS = ("voice", "video")
 MAX_BATCHES_PER_TICK = 10
-MAX_CALLS_PER_EVENT = 4
 MAX_DELTA_ATTEMPTS = 3
-
-
-def call_memberships(content: Any) -> list[tuple[str, str]]:
-    raw = content.get("memberships") if isinstance(content, Mapping) else None
-    if not isinstance(raw, (list, tuple)):
-        return []
-    out: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for membership in raw:
-        if not isinstance(membership, Mapping):
-            continue
-        call_id = membership.get("call_id")
-        kind = membership.get("kind")
-        if not isinstance(call_id, str) or not call_id or len(call_id) > 255:
-            continue
-        if not isinstance(kind, str) or call_id in seen:
-            continue
-        seen.add(call_id)
-        out.append((call_id, kind))
-        if len(out) == MAX_CALLS_PER_EVENT:
-            break
-    return out
 
 
 class DeltaPoller:

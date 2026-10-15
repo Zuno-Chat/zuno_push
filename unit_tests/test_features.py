@@ -3,6 +3,7 @@ from synapse.module_api.errors import SynapseError
 from twisted.trial import unittest
 
 from unit_tests.fakes import run
+from zuno_push.config import FEATURES
 from zuno_push.features import FeatureGate, run_probes
 
 
@@ -17,7 +18,6 @@ async def broken() -> None:
 class FeatureGateTests(unittest.TestCase):
     def test_starting_gate_refuses_everything(self) -> None:
         gate = FeatureGate()
-        self.assertFalse(gate.started)
         with self.assertRaises(SynapseError) as e:
             gate.require("ring")
         self.assertEqual((e.exception.code, e.exception.errcode), (503, "IM.ZUNO.PUSH_DISABLED"))
@@ -54,6 +54,6 @@ class FeatureGateTests(unittest.TestCase):
 
     def test_disable_all(self) -> None:
         gate = FeatureGate()
+        gate.set_ready(dict.fromkeys(FEATURES, True), disabled=[])
         gate.disable_all()
-        self.assertTrue(gate.started)
-        self.assertFalse(gate.enabled("nse"))
+        self.assertFalse(any(gate.enabled(f) for f in FEATURES))

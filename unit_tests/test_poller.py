@@ -3,9 +3,9 @@ from twisted.trial import unittest
 
 from unit_tests.fake_internals import FakeInternals, add_delta, add_event
 from unit_tests.fakes import FakeEvent, FakeModuleApi, run, state_event
-from zuno_push.poller import STARTUP_LOOKBACK_MS, DeltaPoller, call_memberships
+from zuno_push.poller import STARTUP_LOOKBACK_MS, DeltaPoller
 from zuno_push.ratelimit import RateLimiter
-from zuno_push.rules import RingRules
+from zuno_push.rules import RingRules, call_memberships
 from zuno_push.store import PushStore
 
 ROOM = "!room:test"
@@ -183,6 +183,28 @@ class PollerTests(unittest.TestCase):
         self.internals.fail.clear()
         run(self.poller.tick())
         self.assertEqual(self.internals.delta_reads, [(10, 11)])
+        self.assertEqual(self.rings(), [("c1", "@bob:test", "pending")])
+
+    def test_a_room_state_outage_is_retried_and_then_rings(self) -> None:
+        self.publish(membership("@alice:test", ("c1", "voice"), event_id="$m1"), 11)
+        real_get_room_state = self.api.get_room_state
+
+        async def unavailable(room_id: str, event_filter: object = None) -> dict:
+            raise RuntimeError("state unavailable")
+
+        self.api.get_room_state = unavailable
+        run(self.poller.tick())
+        self.assertEqual(self.rings(), [])
+        self.api.get_room_state = real_get_room_state
+        run(self.poller.tick())
+        self.assertEqual(self.rings(), [("c1", "@bob:test", "pending")])
+
+    def test_a_member_list_outage_is_retried_and_then_rings(self) -> None:
+        self.publish(membership("@alice:test", ("c1", "voice"), event_id="$m1"), 11)
+        self.internals.fail.add("local_joined_users")
+        run(self.poller.tick())
+        self.internals.fail.clear()
+        run(self.poller.tick())
         self.assertEqual(self.rings(), [("c1", "@bob:test", "pending")])
 
     def test_a_call_event_that_keeps_failing_is_skipped_after_three_ticks(self) -> None:

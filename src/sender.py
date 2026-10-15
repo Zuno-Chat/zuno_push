@@ -98,7 +98,7 @@ class SygnalSender:
                         "zuno_push: Sygnal answered %s; ring failed", status or "nothing"
                     )
                     metrics.VOIP_SENDS.labels(result="failed" if status else "unreachable").inc()
-                    return SendResult("failed" if status else "error", status, attempts)
+                    return SendResult("error", status, attempts)
                 rejected = response.get("rejected", []) if isinstance(response, dict) else []
                 if pushkey in rejected:
                     metrics.VOIP_SENDS.labels(result="rejected").inc()

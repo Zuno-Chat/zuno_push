@@ -41,7 +41,7 @@ class JanitorTests(unittest.TestCase):
         self.api.conn.execute("DROP TABLE zuno_push_rings")
         run(self.janitor.run())
 
-    def test_sweep_expires_calls_rings_credentials_and_failing_tokens(self) -> None:
+    def test_sweep_expires_calls_rings_and_credentials(self) -> None:
         day = 86_400_000
         now = 10 * day
         run(
@@ -49,9 +49,6 @@ class JanitorTests(unittest.TestCase):
                 CALL, [RingRow("@bob:test", "B", "sent", False)], now - day - 1
             )
         )
-        run(self.store.upsert_voip("@bob:test", "B", "app", "pk", 1, KEY))
-        for _ in range(3):
-            run(self.store.record_send("@bob:test", "B", "pk", "failed", now - day - 5))
         run(self.store.set_credential("@carol:test", "C", "h", now - 1, now - 100, None, None))
         run(self.store.upsert_voip("@dan:test", "D", "app", "pk2", 1, KEY))
         run(self.store.janitor_sweep(now, day))
@@ -59,6 +56,5 @@ class JanitorTests(unittest.TestCase):
         self.assertEqual(
             self.api.conn.execute("SELECT COUNT(*) FROM zuno_push_rings").fetchone()[0], 0
         )
-        self.assertIsNone(run(self.store.get_device("@bob:test", "B")))
         self.assertIsNone(run(self.store.get_device("@carol:test", "C")))
         self.assertTrue(run(self.store.get_device("@dan:test", "D")).has_voip)
