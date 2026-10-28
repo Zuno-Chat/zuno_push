@@ -11,6 +11,8 @@ from zuno_push.voip_api import DeviceResource, VoipResource
 TOKEN_B64 = base64.b64encode(bytes(range(32))).decode()
 KEY_B64 = base64.b64encode(bytes(range(32, 64))).decode()
 BODY = {"app_id": "im.zuno.chat.ios.voip", "pushkey": TOKEN_B64, "kid": 16909060, "key": KEY_B64}
+FCM_TOKEN = "dGVzdA-x_y:APA91bH" + "z" * 140
+ANDROID = {**BODY, "app_id": "im.zuno.chat.android", "pushkey": FCM_TOKEN}
 
 
 class VoipApiTests(unittest.TestCase):
@@ -27,14 +29,15 @@ class VoipApiTests(unittest.TestCase):
         return FakeRequest(b"PUT", body, token="tok")
 
     def test_register_returns_kid_and_server_ts(self) -> None:
-        self.assertEqual(
-            render(self.voip, self.put(BODY)),
-            (200, {"kid": 16909060, "server_ts": 1_790_000_000_000}),
-        )
-        row = run(self.services.store.get_device("@alice:test", "PHONE"))
-        self.assertEqual(
-            (row.voip_app_id, row.voip_pushkey, row.kid, row.voip_key), tuple(BODY.values())
-        )
+        for body in (BODY, ANDROID):
+            self.assertEqual(
+                render(self.voip, self.put(body)),
+                (200, {"kid": 16909060, "server_ts": 1_790_000_000_000}),
+            )
+            row = run(self.services.store.get_device("@alice:test", "PHONE"))
+            self.assertEqual(
+                (row.voip_app_id, row.voip_pushkey, row.kid, row.voip_key), tuple(body.values())
+            )
 
     def test_sandbox_app_id_is_accepted(self) -> None:
         self.assertEqual(
@@ -46,6 +49,12 @@ class VoipApiTests(unittest.TestCase):
             {**BODY, "app_id": "im.zuno.chat.ios"},
             {**BODY, "pushkey": "not base64!"},
             {**BODY, "pushkey": TOKEN_B64.rstrip("=")},
+            {**BODY, "pushkey": FCM_TOKEN},
+            {**ANDROID, "pushkey": ""},
+            {**ANDROID, "pushkey": "has space"},
+            {**ANDROID, "pushkey": "x" * 513},
+            {**ANDROID, "pushkey": 5},
+            {**ANDROID, "key": base64.b64encode(bytes(31)).decode()},
             {**BODY, "kid": 0},
             {**BODY, "kid": 4294967296},
             {**BODY, "kid": "1"},

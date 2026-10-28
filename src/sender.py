@@ -17,7 +17,7 @@ TIMEOUT_S = 4.0
 RETRY_DELAY_S = 1.0
 RETRY_WINDOW_MS = 10_000
 IMMEDIATE_MS = 2_000
-APNS_PAYLOAD_LIMIT = 4096
+PUSH_PAYLOAD_LIMIT = 4096
 
 
 @dataclass(frozen=True)
@@ -43,7 +43,7 @@ def notify_body(app_id: str, pushkey: str, blob_b64: str) -> dict[str, Any]:
     }
 
 
-def apns_payload_size(blob_b64: str) -> int:
+def payload_size(blob_b64: str) -> int:
     return len(f'{{"z":"{blob_b64}","event_id":"{CONSTANT_EVENT_ID}"}}'.encode())
 
 
@@ -54,8 +54,8 @@ class SygnalSender:
         self._url = notify_url
 
     async def send(self, app_id: str, pushkey: str, blob_b64: str, trigger_ts: int) -> SendResult:
-        if apns_payload_size(blob_b64) >= APNS_PAYLOAD_LIMIT:
-            logger.warning("zuno_push: VoIP payload over the APNs limit, not sent")
+        if payload_size(blob_b64) >= PUSH_PAYLOAD_LIMIT:
+            logger.warning("zuno_push: ring payload over the 4 KB push limit, not sent")
             metrics.VOIP_SENDS.labels(result="too_large").inc()
             return SendResult("error", None, 0)
         body = notify_body(app_id, pushkey, blob_b64)

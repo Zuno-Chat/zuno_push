@@ -5,6 +5,7 @@ from typing import Any
 
 FEATURES = ("ring", "health", "test", "nse", "catchup")
 DEFAULT_VOIP_APP_IDS = ("im.zuno.chat.ios.voip", "im.zuno.chat.ios.dev.voip")
+DEFAULT_FCM_APP_IDS = ("im.zuno.chat.android",)
 DEFAULT_MAX_RING_TARGETS = 5000
 NOTIFY_PATH = "/_matrix/push/v1/notify"
 
@@ -13,6 +14,7 @@ NOTIFY_PATH = "/_matrix/push/v1/notify"
 class ZunoPushConfig:
     sygnal_notify_url: str = ""
     voip_app_ids: tuple[str, ...] = DEFAULT_VOIP_APP_IDS
+    fcm_app_ids: tuple[str, ...] = DEFAULT_FCM_APP_IDS
     max_ring_targets: int = DEFAULT_MAX_RING_TARGETS
     disabled_features: frozenset[str] = field(default_factory=frozenset)
     error: str | None = None
@@ -33,6 +35,7 @@ def _parse(raw: Any) -> ZunoPushConfig:
     unknown = set(raw) - {
         "sygnal_notify_url",
         "voip_app_ids",
+        "fcm_app_ids",
         "max_ring_targets",
         "disabled_features",
     }
@@ -45,13 +48,12 @@ def _parse(raw: Any) -> ZunoPushConfig:
     if not url.endswith(NOTIFY_PATH):
         raise ValueError(f"sygnal_notify_url must end with {NOTIFY_PATH}")
 
-    app_ids = raw.get("voip_app_ids", list(DEFAULT_VOIP_APP_IDS))
-    if (
-        not isinstance(app_ids, list)
-        or not app_ids
-        or not all(isinstance(a, str) and a for a in app_ids)
-    ):
-        raise ValueError("voip_app_ids must be a non-empty list of strings")
+    app_ids = _app_ids(raw, "voip_app_ids", DEFAULT_VOIP_APP_IDS)
+    if not app_ids:
+        raise ValueError("voip_app_ids must not be empty")
+    fcm_ids = _app_ids(raw, "fcm_app_ids", DEFAULT_FCM_APP_IDS)
+    if set(fcm_ids) & set(app_ids):
+        raise ValueError("fcm_app_ids and voip_app_ids must not share an app id")
 
     cap = raw.get("max_ring_targets", DEFAULT_MAX_RING_TARGETS)
     if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
@@ -63,7 +65,15 @@ def _parse(raw: Any) -> ZunoPushConfig:
 
     return ZunoPushConfig(
         sygnal_notify_url=url,
-        voip_app_ids=tuple(app_ids),
+        voip_app_ids=app_ids,
+        fcm_app_ids=fcm_ids,
         max_ring_targets=cap,
         disabled_features=frozenset(disabled),
     )
+
+
+def _app_ids(raw: dict[str, Any], key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    ids = raw.get(key, list(default))
+    if not isinstance(ids, list) or not all(isinstance(a, str) and a for a in ids):
+        raise ValueError(f"{key} must be a list of strings")
+    return tuple(ids)

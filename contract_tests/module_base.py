@@ -66,13 +66,19 @@ class ModuleTestCase(ContractTestCase):
             shorthand=False,
         )
 
-    def register_voip(self, token: str, kid: int = 1, pushkey: bytes = b"token") -> FakeChannel:
+    def register_voip(
+        self,
+        token: str,
+        kid: int = 1,
+        pushkey: str = base64.b64encode(b"token").decode(),
+        app_id: str = "im.zuno.chat.ios.voip",
+    ) -> FakeChannel:
         return self.call(
             "PUT",
             "voip",
             {
-                "app_id": "im.zuno.chat.ios.voip",
-                "pushkey": base64.b64encode(pushkey).decode(),
+                "app_id": app_id,
+                "pushkey": pushkey,
                 "kid": kid,
                 "key": base64.b64encode(VOIP_KEY).decode(),
             },

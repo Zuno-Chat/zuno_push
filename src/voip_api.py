@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 from typing import Any
 
 from zuno_push import errors, ratelimit
 from zuno_push.http import ZunoResource, bearer, read_json, require_int
 
 MAX_KID = 0xFFFFFFFF
+FCM_TOKEN = re.compile(r"[\x21-\x7e]{1,512}")
 
 
 def strict_b64(value: Any, key: str, min_len: int, max_len: int) -> bytes:
@@ -29,10 +31,14 @@ class VoipResource(ZunoResource):
         await self._s.limiter.check(ratelimit.VOIP_PUT, f"{user_id}|{device_id}")
         body = read_json(request)
         app_id = body.get("app_id")
-        if app_id not in self._s.config.voip_app_ids:
-            raise errors.invalid_param("'app_id' is not a Zuno VoIP app id")
         pushkey = body.get("pushkey")
-        strict_b64(pushkey, "pushkey", 1, 512)
+        if app_id in self._s.config.fcm_app_ids:
+            if not isinstance(pushkey, str) or not FCM_TOKEN.fullmatch(pushkey):
+                raise errors.invalid_param("'pushkey' must be an FCM token")
+        elif app_id in self._s.config.voip_app_ids:
+            strict_b64(pushkey, "pushkey", 1, 512)
+        else:
+            raise errors.invalid_param("'app_id' is not a Zuno ring app id")
         kid = require_int(body, "kid", 1, MAX_KID)
         key = body.get("key")
         strict_b64(key, "key", 32, 32)

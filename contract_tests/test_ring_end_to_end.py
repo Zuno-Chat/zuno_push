@@ -66,6 +66,23 @@ class RingEndToEndTests(ModuleTestCase):
         self.assertEqual(channel.code, 200, channel.json_body)
         return channel.json_body
 
+    def test_android_registration_rings_over_fcm(self) -> None:
+        token = "fcm-tok_1:APA91b"
+        registered = self.register_voip(
+            self.bob[1], kid=78, pushkey=token, app_id="im.zuno.chat.android"
+        )
+        self.assertEqual(registered.code, 200)
+        self.publish(self.alice, "c1")
+        self.pump(0.5)
+        self.assertEqual(len(self.sygnal_requests), 1)
+        notification = self.sygnal_requests[0]["notification"]
+        self.assertEqual(set(notification), {"event_id", "prio", "devices"})
+        self.assertEqual(notification["event_id"], "$z")
+        device = notification["devices"][0]
+        self.assertEqual((device["app_id"], device["pushkey"]), ("im.zuno.chat.android", token))
+        kid, plain = open_blob(device["data"]["default_payload"]["z"])
+        self.assertEqual((kid, plain["call"]), (78, "c1"))
+
     def test_v12_dm_call_rings_the_creator_peer_once(self) -> None:
         self.publish(self.alice, "c1")
         self.pump(0.5)

@@ -6,7 +6,7 @@ from twisted.trial import unittest
 
 from unit_tests.fake_internals import FakeInternals
 from unit_tests.fakes import FakeModuleApi
-from zuno_push.sender import CONSTANT_EVENT_ID, SygnalSender, apns_payload_size, notify_body
+from zuno_push.sender import CONSTANT_EVENT_ID, SygnalSender, notify_body, payload_size
 
 URL = "http://sygnal.internal:5000/_matrix/push/v1/notify"
 BLOB = "A" * 732
@@ -101,7 +101,7 @@ class SenderTests(unittest.TestCase):
 
     def test_oversized_payload_is_not_sent(self) -> None:
         big = "A" * 4100
-        self.assertGreaterEqual(apns_payload_size(big), 4096)
+        self.assertGreaterEqual(payload_size(big), 4096)
         result = self.successResultOf(
             defer.ensureDeferred(self.sender.send("app", "cGs=", big, self.now))
         )
