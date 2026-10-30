@@ -16,7 +16,7 @@ from zuno_push.services import Services, build_services
 
 logger = logging.getLogger("zuno_push")
 
-TESTED_SYNAPSE_VERSION = "1.162.0"
+TESTED_SYNAPSE_VERSION = "1.164.0"
 POLL_INTERVAL_MS = 250
 
 
