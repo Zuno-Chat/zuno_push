@@ -27,7 +27,7 @@ class SendResult:
     attempts: int
 
 
-def notify_body(app_id: str, pushkey: str, blob_b64: str) -> dict[str, Any]:
+def notify_body(app_id: str, pushkey: str, blob_b64: str, field: str = "z") -> dict[str, Any]:
     return {
         "notification": {
             "event_id": CONSTANT_EVENT_ID,
@@ -36,15 +36,15 @@ def notify_body(app_id: str, pushkey: str, blob_b64: str) -> dict[str, Any]:
                 {
                     "app_id": app_id,
                     "pushkey": pushkey,
-                    "data": {"default_payload": {"z": blob_b64}},
+                    "data": {"default_payload": {field: blob_b64}},
                 }
             ],
         }
     }
 
 
-def payload_size(blob_b64: str) -> int:
-    return len(f'{{"z":"{blob_b64}","event_id":"{CONSTANT_EVENT_ID}"}}'.encode())
+def payload_size(blob_b64: str, field: str = "z") -> int:
+    return len(f'{{"{field}":"{blob_b64}","event_id":"{CONSTANT_EVENT_ID}"}}'.encode())
 
 
 class SygnalSender:
@@ -53,12 +53,14 @@ class SygnalSender:
         self._timeouts = timeouts
         self._url = notify_url
 
-    async def send(self, app_id: str, pushkey: str, blob_b64: str, trigger_ts: int) -> SendResult:
-        if payload_size(blob_b64) >= PUSH_PAYLOAD_LIMIT:
+    async def send(
+        self, app_id: str, pushkey: str, blob_b64: str, trigger_ts: int, field: str = "z"
+    ) -> SendResult:
+        if payload_size(blob_b64, field) >= PUSH_PAYLOAD_LIMIT:
             logger.warning("zuno_push: ring payload over the 4 KB push limit, not sent")
             metrics.VOIP_SENDS.labels(result="too_large").inc()
             return SendResult("error", None, 0)
-        body = notify_body(app_id, pushkey, blob_b64)
+        body = notify_body(app_id, pushkey, blob_b64, field)
         attempts = 0
         with metrics.VOIP_SEND_SECONDS.time():
             while True:
@@ -104,7 +106,4 @@ class SygnalSender:
                     metrics.VOIP_SENDS.labels(result="rejected").inc()
                     return SendResult("rejected", 200, attempts)
                 metrics.VOIP_SENDS.labels(result="sent").inc()
-                metrics.RING_LATENCY_SECONDS.observe(
-                    max(0, self._api.get_current_time_msec() - trigger_ts) / 1000
-                )
                 return SendResult("sent", 200, attempts)

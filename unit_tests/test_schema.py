@@ -3,7 +3,7 @@ import sqlite3
 from twisted.trial import unittest
 
 from unit_tests.fakes import FakeModuleApi, run
-from zuno_push.schema import SCHEMA_VERSION, SchemaTooNew, migrate, migrate_txn
+from zuno_push.schema import MIGRATIONS, SCHEMA_VERSION, SchemaTooNew, migrate, migrate_txn
 
 TABLES = {
     "zuno_push_schema",
@@ -34,6 +34,21 @@ class SchemaTests(unittest.TestCase):
         run(migrate(api))
         self.assertEqual(api.conn.execute("SELECT COUNT(*) FROM zuno_push_schema").fetchone()[0], 1)
         self.assertEqual(api.conn.execute("SELECT hits FROM zuno_push_counters").fetchone()[0], 7)
+
+    def test_a_version_1_database_keeps_its_rings_and_gains_the_ending_column(self) -> None:
+        api = FakeModuleApi(migrated=False)
+        for statement in MIGRATIONS[1]:
+            api.conn.execute(statement)
+        api.conn.execute("CREATE TABLE zuno_push_schema (lock TEXT PRIMARY KEY, version INTEGER)")
+        api.conn.execute("INSERT INTO zuno_push_schema VALUES ('X', 1)")
+        api.conn.execute(
+            "INSERT INTO zuno_push_rings (room_id, call_id, user_id, device_id, state, ts)"
+            " VALUES ('!r:test', 'c1', '@b:test', 'B', 'sent', 1)"
+        )
+        api.conn.commit()
+        self.assertEqual(run(migrate(api)), 2)
+        rows = api.conn.execute("SELECT state, ending FROM zuno_push_rings").fetchall()
+        self.assertEqual(rows, [("sent", None)])
 
     def test_newer_schema_is_refused(self) -> None:
         api = FakeModuleApi()

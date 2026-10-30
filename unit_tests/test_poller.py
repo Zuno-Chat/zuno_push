@@ -5,7 +5,7 @@ from unit_tests.fake_internals import FakeInternals, add_delta, add_event
 from unit_tests.fakes import FakeEvent, FakeModuleApi, run, state_event
 from zuno_push.poller import STARTUP_LOOKBACK_MS, DeltaPoller
 from zuno_push.ratelimit import RateLimiter
-from zuno_push.rules import RingRules, call_memberships
+from zuno_push.rules import RingRules, call_devices, call_memberships
 from zuno_push.store import PushStore
 
 ROOM = "!room:test"
@@ -13,14 +13,18 @@ KEY = "A" * 43 + "="
 NOW = 1_790_000_000_000
 
 
-def membership(sender: str, *calls: tuple[str, str], event_id: str) -> FakeEvent:
+def membership(sender: str, *calls: tuple[str, str], event_id: str, device: str = "D") -> FakeEvent:
     return FakeEvent(
         type="m.call.member",
         sender=sender,
         state_key=sender,
         room_id=ROOM,
         event_id=event_id,
-        content={"memberships": [{"call_id": c, "kind": k, "expires_ts": 1} for c, k in calls]},
+        content={
+            "memberships": [
+                {"call_id": c, "kind": k, "device_id": device, "expires_ts": 1} for c, k in calls
+            ]
+        },
     )
 
 
@@ -41,6 +45,21 @@ class CallMembershipParsingTests(unittest.TestCase):
         self.assertEqual(call_memberships(content), [("c1", "voice"), ("c3", "screen")])
         self.assertEqual(call_memberships({"memberships": "x"}), [])
         self.assertEqual(call_memberships(None), [])
+
+    def test_call_devices_lists_the_devices_in_one_call(self) -> None:
+        content = {
+            "memberships": [
+                {"call_id": "c1", "device_id": "A"},
+                {"call_id": "c2", "device_id": "B"},
+                {"call_id": "c1", "device_id": 5},
+                {"call_id": "c1"},
+                "junk",
+                {"call_id": "c1", "device_id": "C"},
+            ]
+        }
+        self.assertEqual(call_devices(content, "c1"), ["A", "C"])
+        self.assertEqual(call_devices({"memberships": "x"}, "c1"), [])
+        self.assertEqual(call_devices(None, "c1"), [])
 
 
 class PollerTests(unittest.TestCase):
@@ -137,11 +156,14 @@ class PollerTests(unittest.TestCase):
             membership("@alice:test", ("c1", "voice"), event_id="$m2"), 12, received_ts=NOW + 50_000
         )
         self.publish(
-            membership("@bob:test", ("c1", "voice"), event_id="$m3"), 13, received_ts=NOW + 50_000
+            membership("@bob:test", ("c1", "voice"), event_id="$m3", device="PHONE"),
+            13,
+            received_ts=NOW + 50_000,
         )
         run(self.poller.tick())
         self.assertEqual(len(self.rings()), 1)
         self.assertEqual(self.kicks, 1)
+        self.assertEqual(self.endings(), [("PHONE", "joined")])
         seen = self.api.conn.execute("SELECT last_seen_ts FROM zuno_push_calls").fetchone()[0]
         self.assertEqual(seen, NOW + 50_000)
 
@@ -265,3 +287,29 @@ class PollerTests(unittest.TestCase):
             self.rings(),
             [("c1", "@alice:test", "pending"), ("c1", "@bob:test", "suppressed:sender")],
         )
+
+    def endings(self) -> list[tuple]:
+        return self.api.conn.execute(
+            "SELECT device_id, ending FROM zuno_push_rings WHERE user_id = '@bob:test'"
+            " ORDER BY device_id"
+        ).fetchall()
+
+    def test_the_callers_hang_up_marks_every_ring_and_kicks_the_ringer(self) -> None:
+        self.publish(membership("@alice:test", ("c1", "voice"), event_id="$m1"), 11)
+        run(self.poller.tick())
+        self.publish(membership("@alice:test", event_id="$m2"), 12)
+        run(self.poller.tick())
+        self.assertEqual(self.endings(), [("PHONE", "hung_up")])
+        self.assertEqual(self.kicks, 2)
+
+    def test_a_join_from_one_device_ends_the_users_other_rings(self) -> None:
+        self.internals.devices.add(("@bob:test", "TABLET"))
+        run(self.store.upsert_voip("@bob:test", "TABLET", "im.zuno.chat.android", "f", 1, KEY))
+        self.publish(membership("@alice:test", ("c1", "voice"), event_id="$m1"), 11)
+        run(self.poller.tick())
+        self.publish(membership("@bob:test", ("c1", "voice"), event_id="$m2", device="TABLET"), 12)
+        self.publish(membership("@bob:test", ("c1", "voice"), event_id="$m3", device="TABLET"), 13)
+        self.publish(membership("@alice:test", event_id="$m4"), 14)
+        run(self.poller.tick())
+        self.assertEqual(self.endings(), [("PHONE", "answered_elsewhere"), ("TABLET", "joined")])
+        self.assertEqual(self.kicks, 2)

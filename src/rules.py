@@ -86,6 +86,19 @@ def call_memberships(content: Any) -> list[tuple[str, str]]:
     return out
 
 
+def call_devices(content: Any, call_id: str) -> list[str]:
+    raw = content.get("memberships") if isinstance(content, Mapping) else None
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [
+        m["device_id"]
+        for m in raw
+        if isinstance(m, Mapping)
+        and m.get("call_id") == call_id
+        and isinstance(m.get("device_id"), str)
+    ]
+
+
 class RingRules:
     def __init__(
         self,

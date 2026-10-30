@@ -45,7 +45,7 @@ def build_services(api: ModuleApi, config: ZunoPushConfig, internals: Internals)
     limiter = RateLimiter(api)
     sender = SygnalSender(api, internals, config.sygnal_notify_url)
     rules = RingRules(api, internals, store, limiter, config.max_ring_targets)
-    ringer = Ringer(api, store, sender)
+    ringer = Ringer(api, store, sender, config.fcm_app_ids)
     scope = NseScope(api, internals)
     return Services(
         api=api,

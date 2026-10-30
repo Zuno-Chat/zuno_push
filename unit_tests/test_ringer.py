@@ -10,12 +10,14 @@ from unit_tests.fakes import FakeModuleApi, run
 from unit_tests.test_sealer import open_blob
 from unit_tests.test_sender import failing
 from zuno_push.ringer import Ringer
+from zuno_push.sealer import expiry
 from zuno_push.sender import SygnalSender
 from zuno_push.store import CallRow, PushStore, RingRow
 
 KEY = bytes(range(32))
 KEY_B64 = base64.b64encode(KEY).decode()
 NOW = 1_790_000_000_000
+ANDROID = "im.zuno.chat.android"
 
 
 class RingerTests(unittest.TestCase):
@@ -27,7 +29,7 @@ class RingerTests(unittest.TestCase):
         sender = SygnalSender(
             self.api, FakeInternals(self.api), "http://sygnal/_matrix/push/v1/notify"
         )
-        self.ringer = Ringer(self.api, self.store, sender)
+        self.ringer = Ringer(self.api, self.store, sender, (ANDROID,))
 
     def call(
         self,
@@ -40,10 +42,10 @@ class RingerTests(unittest.TestCase):
         row = CallRow("!r:test", call_id, "@alice:test", "video", received_ts, cname, rname)
         run(self.store.create_call_with_rings(row, list(rings), self.api.get_current_time_msec()))
 
-    def register(self, user_id: str, device_id: str, pushkey: str) -> None:
-        run(
-            self.store.upsert_voip(user_id, device_id, "im.zuno.chat.ios.voip", pushkey, 9, KEY_B64)
-        )
+    def register(
+        self, user_id: str, device_id: str, pushkey: str, app_id: str = "im.zuno.chat.ios.voip"
+    ) -> None:
+        run(self.store.upsert_voip(user_id, device_id, app_id, pushkey, 9, KEY_B64))
 
     def state(self, user_id: str, device_id: str) -> tuple:
         return run(self.store.ring_and_call("!r:test", "c1", user_id, device_id))[0]
@@ -119,6 +121,7 @@ class RingerTests(unittest.TestCase):
             self.api,
             self.store,
             SygnalSender(self.api, FakeInternals(self.api), "http://s/_matrix/push/v1/notify"),
+            (ANDROID,),
         )
         run(fresh.drive())
         self.assertEqual(self.state("@bob:test", "B")[0], "sent")
@@ -230,3 +233,74 @@ class RingerTests(unittest.TestCase):
         self.ringer.kick()
         gate.callback({"rejected": []})
         self.assertEqual(len(self.api.http_client.requests), 2)
+
+    def ending(self, user_id: str, device_id: str) -> str | None:
+        return self.api.conn.execute(
+            "SELECT ending FROM zuno_push_rings WHERE user_id = ? AND device_id = ?",
+            (user_id, device_id),
+        ).fetchone()[0]
+
+    def test_hang_up_sends_one_sealed_end_to_the_rung_android_device(self) -> None:
+        self.register("@bob:test", "B", "fcm-b", ANDROID)
+        self.call("c1", NOW - 1_000, RingRow("@bob:test", "B", "pending", False))
+        run(self.ringer.drive())
+        self.clock.advance(2)
+        run(self.store.end_calls("!r:test", "@alice:test", []))
+        run(self.ringer.drive())
+        run(self.ringer.drive())
+        self.assertEqual(len(self.api.http_client.requests), 2)
+        notification = self.api.http_client.requests[1][1]["notification"]
+        self.assertEqual((notification["event_id"], notification["prio"]), ("$z", "high"))
+        device = notification["devices"][0]
+        self.assertEqual((device["app_id"], device["pushkey"]), (ANDROID, "fcm-b"))
+        self.assertEqual(list(device["data"]["default_payload"]), ["ze"])
+        kid, x, plain = open_blob(KEY, base64.b64decode(device["data"]["default_payload"]["ze"]))
+        self.assertEqual((kid, x), (9, expiry(NOW + 2_000, NOW - 1_000)))
+        self.assertEqual(
+            plain, {"room": "!r:test", "call": "c1", "reason": "hung_up", "ts": NOW + 2_000}
+        )
+        self.assertEqual(self.ending("@bob:test", "B"), "sent")
+        self.assertEqual(self.state("@bob:test", "B"), ("sent", NOW))
+
+    def test_ios_rings_get_no_end(self) -> None:
+        self.register("@bob:test", "B", "pk-b")
+        self.call("c1", NOW, RingRow("@bob:test", "B", "pending", False))
+        run(self.ringer.drive())
+        run(self.store.end_calls("!r:test", "@alice:test", []))
+        run(self.ringer.drive())
+        self.assertEqual(len(self.api.http_client.requests), 1)
+
+    def test_a_ring_still_sending_at_hang_up_is_followed_by_its_end(self) -> None:
+        self.register("@bob:test", "B", "fcm-b", ANDROID)
+        self.call("c1", NOW, RingRow("@bob:test", "B", "pending", False))
+        gate: defer.Deferred = defer.Deferred()
+        self.api.http_client.responses.append(lambda: gate)
+        self.ringer.kick()
+        run(self.store.end_calls("!r:test", "@alice:test", []))
+        self.ringer.kick()
+        gate.callback({"rejected": []})
+        payloads = [
+            b["notification"]["devices"][0]["data"]["default_payload"]
+            for _, b in self.api.http_client.requests
+        ]
+        self.assertEqual([list(p) for p in payloads], [["z"], ["ze"]])
+
+    def test_no_end_once_the_ring_has_expired_on_its_own(self) -> None:
+        self.register("@bob:test", "B", "fcm-b", ANDROID)
+        self.call("c1", NOW, RingRow("@bob:test", "B", "pending", False))
+        run(self.ringer.drive())
+        self.clock.advance(76)
+        run(self.store.end_calls("!r:test", "@alice:test", []))
+        run(self.ringer.drive())
+        self.assertEqual(len(self.api.http_client.requests), 1)
+
+    def test_a_failed_end_is_not_retried(self) -> None:
+        self.register("@bob:test", "B", "fcm-b", ANDROID)
+        self.call("c1", NOW, RingRow("@bob:test", "B", "pending", False))
+        run(self.ringer.drive())
+        run(self.store.answer_call("!r:test", "c1", "@bob:test", ["OTHER"]))
+        self.api.http_client.responses.append(failing(400))
+        run(self.ringer.drive())
+        run(self.ringer.drive())
+        self.assertEqual(len(self.api.http_client.requests), 2)
+        self.assertEqual(self.ending("@bob:test", "B"), "failed")

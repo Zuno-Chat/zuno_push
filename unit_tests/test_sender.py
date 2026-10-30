@@ -49,6 +49,13 @@ class SenderTests(unittest.TestCase):
             self.assertNotIn(absent, notification)
         self.assertEqual(notification["devices"][0]["data"], {"default_payload": {"z": BLOB}})
 
+    def test_ring_end_goes_under_ze_and_keeps_the_constant_event_id(self) -> None:
+        d = self.sender.send("im.zuno.chat.android", "fcm", BLOB, self.now, field="ze")
+        self.assertEqual(self.successResultOf(defer.ensureDeferred(d)).outcome, "sent")
+        notification = self.api.http_client.requests[0][1]["notification"]
+        self.assertEqual(notification["event_id"], CONSTANT_EVENT_ID)
+        self.assertEqual(notification["devices"][0]["data"], {"default_payload": {"ze": BLOB}})
+
     def test_rejected_pushkey(self) -> None:
         self.api.http_client.responses.append(lambda: {"rejected": ["cGs="]})
         self.assertEqual(self.successResultOf(self.send()).outcome, "rejected")

@@ -13,6 +13,7 @@ AAD_PREFIX = b"zuno-voip-v1"
 PAD_SMALL = 512
 PAD_LARGE = 1024
 NONCE_BYTES = 12
+LIFETIME_S = 45
 
 
 class PayloadTooLarge(Exception):
@@ -44,8 +45,21 @@ class RingPayload:
         return json.dumps(ordered, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+@dataclass(frozen=True)
+class RingEndPayload:
+    room: str
+    call: str
+    reason: str
+    ts: int
+    rts: int
+
+    def to_json_bytes(self) -> bytes:
+        ordered = {"room": self.room, "call": self.call, "reason": self.reason, "ts": self.ts}
+        return json.dumps(ordered, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
 def expiry(ts: int, rts: int) -> int:
-    return min(ts, rts + 30_000) // 1000 + 45
+    return min(ts, rts + 30_000) // 1000 + LIFETIME_S
 
 
 def pad(plaintext: bytes) -> bytes:
@@ -58,7 +72,9 @@ def pad(plaintext: bytes) -> bytes:
     return plaintext + b"\x00" * (size - len(plaintext))
 
 
-def seal(key: bytes, kid: int, payload: RingPayload, nonce: bytes | None = None) -> bytes:
+def seal(
+    key: bytes, kid: int, payload: RingPayload | RingEndPayload, nonce: bytes | None = None
+) -> bytes:
     if len(key) != 32:
         raise ValueError("key must be 32 bytes")
     if not 1 <= kid <= 0xFFFFFFFF:
@@ -72,5 +88,7 @@ def seal(key: bytes, kid: int, payload: RingPayload, nonce: bytes | None = None)
     return header + nonce + sealed
 
 
-def seal_b64(key: bytes, kid: int, payload: RingPayload, nonce: bytes | None = None) -> str:
+def seal_b64(
+    key: bytes, kid: int, payload: RingPayload | RingEndPayload, nonce: bytes | None = None
+) -> str:
     return base64.b64encode(seal(key, kid, payload, nonce)).decode("ascii")

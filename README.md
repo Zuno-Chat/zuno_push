@@ -14,7 +14,7 @@ Synapse module that rings a closed Zuno app through stock Sygnal pushes (PushKit
 | `POST nse/fetch` | One notified event, plus `missed` and `read_rooms` |
 | `POST ring/status` | Long-poll a call's ring outcome for this device |
 
-On the background-tasks instance, a 250 ms poller follows `m.call.member` state deltas, applies Synapse's own power-level and push-rule evaluation, and seals one ChaCha20-Poly1305 blob per device for Sygnal's `/notify`. Every private Synapse call lives in `src/internals.py`. Startup probes gate each feature, and `contract_tests/` pins that code inside Synapse's own test harness at the version in `contract_tests/SYNAPSE_VERSION`.
+On the background-tasks instance, a 250 ms poller follows `m.call.member` state deltas, applies Synapse's own power-level and push-rule evaluation, and seals one ChaCha20-Poly1305 blob per device for Sygnal's `/notify`. When the caller hangs up, or the user answers on another device, each Android device it rang gets one sealed ring-end push (`ze`, reason `hung_up` or `answered_elsewhere`) so the ring stops at once; iOS gets none, because every PushKit push must report a new call. Every private Synapse call lives in `src/internals.py`. Startup probes gate each feature, and `contract_tests/` pins that code inside Synapse's own test harness at the version in `contract_tests/SYNAPSE_VERSION`.
 
 ## Config
 

@@ -4,7 +4,7 @@ from typing import Any
 
 from synapse.module_api import ModuleApi
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MIGRATIONS: dict[int, list[str]] = {
     1: [
@@ -73,6 +73,7 @@ MIGRATIONS: dict[int, list[str]] = {
         )
         """,
     ],
+    2: ["ALTER TABLE zuno_push_rings ADD COLUMN ending TEXT"],
 }
 
 

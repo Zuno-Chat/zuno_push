@@ -7,7 +7,7 @@ from synapse.module_api import ModuleApi
 
 from zuno_push import metrics
 from zuno_push.records import Internals
-from zuno_push.rules import CallStart, RingRules, call_memberships
+from zuno_push.rules import CallStart, RingRules, call_devices, call_memberships
 from zuno_push.store import CallRow, PushStore
 
 logger = logging.getLogger("zuno_push")
@@ -97,13 +97,17 @@ class DeltaPoller:
             received_ts = int(times.received_ts or times.origin_server_ts or 0)
         now = self._api.get_current_time_msec()
         memberships = call_memberships(event.content)
-        await self._store.end_calls(room_id, event.sender, [c for c, _ in memberships])
-        created = False
+        created = (
+            await self._store.end_calls(room_id, event.sender, [c for c, _ in memberships]) > 0
+        )
         for call_id, kind in memberships:
             if kind not in RING_KINDS:
                 continue
             if await self._store.call_exists(room_id, call_id):
                 await self._store.touch_call(room_id, call_id, now)
+                devices = call_devices(event.content, call_id)
+                if await self._store.answer_call(room_id, call_id, event.sender, devices):
+                    created = True
                 continue
             call = CallStart(room_id, call_id, event.sender, kind, received_ts)
             metrics.POLLER_LAG_SECONDS.observe(max(0, now - received_ts) / 1000)

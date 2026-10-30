@@ -8,6 +8,8 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from tests.zuno_push_contract.base import ENCRYPTION
 from tests.zuno_push_contract.module_base import VOIP_KEY, ModuleTestCase
 
+ANDROID = "im.zuno.chat.android"
+
 
 def open_blob(blob_b64: str) -> tuple[int, dict]:
     blob = base64.b64decode(blob_b64)
@@ -38,17 +40,23 @@ class RingEndToEndTests(ModuleTestCase):
         self.pump(1)
         self.sygnal_requests.clear()
 
-    def publish(self, user: tuple[str, str], call_id: str, kind: str = "video") -> None:
-        memberships = [
-            {
-                "call_id": call_id,
-                "kind": kind,
-                "device_id": "D",
-                "expires_ts": 1,
-                "created_ts": 1,
-                "foci_active": {},
-            }
-        ]
+    def publish(
+        self, user: tuple[str, str], call_id: str | None, kind: str = "video", device: str = "D"
+    ) -> None:
+        memberships = (
+            []
+            if call_id is None
+            else [
+                {
+                    "call_id": call_id,
+                    "kind": kind,
+                    "device_id": device,
+                    "expires_ts": 1,
+                    "created_ts": 1,
+                    "foci_active": {},
+                }
+            ]
+        )
         self.helper.send_state(
             self.room, "m.call.member", {"memberships": memberships}, tok=user[1], state_key=user[0]
         )
@@ -82,6 +90,45 @@ class RingEndToEndTests(ModuleTestCase):
         self.assertEqual((device["app_id"], device["pushkey"]), ("im.zuno.chat.android", token))
         kid, plain = open_blob(device["data"]["default_payload"]["z"])
         self.assertEqual((kid, plain["call"]), (78, "c1"))
+
+    def ended_ring(self, token: str) -> dict:
+        self.assertEqual(len(self.sygnal_requests), 2)
+        notification = self.sygnal_requests[1]["notification"]
+        self.assertEqual(notification["event_id"], "$z")
+        device = notification["devices"][0]
+        self.assertEqual((device["app_id"], device["pushkey"]), (ANDROID, token))
+        self.assertEqual(list(device["data"]["default_payload"]), ["ze"])
+        kid, plain = open_blob(device["data"]["default_payload"]["ze"])
+        self.assertEqual(kid, 78)
+        self.assertEqual(set(plain), {"room", "call", "reason", "ts"})
+        self.assertEqual((plain["room"], plain["call"]), (self.room, "c1"))
+        return plain
+
+    def test_android_ring_ends_when_the_caller_hangs_up(self) -> None:
+        token = "fcm-tok_1:APA91b"
+        self.assertEqual(self.register_voip(self.bob[1], 78, token, ANDROID).code, 200)
+        self.publish(self.alice, "c1")
+        self.pump(0.5)
+        self.publish(self.alice, None)
+        self.pump(0.5)
+        self.assertEqual(self.ended_ring(token)["reason"], "hung_up")
+        self.publish(self.alice, None)
+        self.pump(0.5)
+        self.assertEqual(len(self.sygnal_requests), 2)
+        self.assertEqual(self.ring_status("c1")["status"], "sent")
+
+    def test_android_ring_ends_when_answered_on_another_device(self) -> None:
+        token = "fcm-tok_1:APA91b"
+        self.assertEqual(self.register_voip(self.bob[1], 78, token, ANDROID).code, 200)
+        laptop = self.device_of(self.login("bob", "pass"))
+        self.publish(self.alice, "c1")
+        self.pump(0.5)
+        self.publish(self.bob, "c1", device=laptop)
+        self.pump(0.5)
+        self.assertEqual(self.ended_ring(token)["reason"], "answered_elsewhere")
+        self.publish(self.alice, None)
+        self.pump(0.5)
+        self.assertEqual(len(self.sygnal_requests), 2)
 
     def test_v12_dm_call_rings_the_creator_peer_once(self) -> None:
         self.publish(self.alice, "c1")

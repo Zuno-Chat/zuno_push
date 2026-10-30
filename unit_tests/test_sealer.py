@@ -9,7 +9,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from twisted.trial import unittest
 
-from zuno_push.sealer import PayloadTooLarge, RingPayload, expiry, seal, seal_b64
+from zuno_push.sealer import PayloadTooLarge, RingEndPayload, RingPayload, expiry, seal, seal_b64
 
 KEY = bytes(range(0x00, 0x20))
 NONCE = bytes(range(0xA0, 0xAC))
@@ -38,6 +38,7 @@ VECTOR_B64 = (
     "vY78cI3xfXod"
 )
 FIXTURE = os.path.join(os.path.dirname(__file__), "..", "fixtures", "push", "voip_blob_v1.json")
+RING_END = os.path.join(os.path.dirname(__file__), "..", "fixtures", "push", "ring_end_v1.json")
 PAYLOAD_KEYS = ("room", "call", "caller", "cname", "rname", "kind", "ts", "rts")
 
 
@@ -115,6 +116,28 @@ class SharedBlobVectorTests(unittest.TestCase):
         for case in fixture["tamper"]:
             outcome = classify(key, fixture["kid"], case["blob"])
             self.assertEqual(outcome, case["expect"], case["name"])
+
+
+class RingEndVectorTests(unittest.TestCase):
+    def test_every_ring_end_vector(self) -> None:
+        with open(RING_END, encoding="utf-8") as f:
+            fixture = json.load(f)
+        key = base64.b64decode(fixture["key"])
+        kid = fixture["kid"]
+        self.assertEqual((fixture["aad_prefix"], fixture["data_key"]), ("zuno-voip-v1", "ze"))
+        self.assertEqual(len(fixture["vectors"]), 4)
+        for vector in fixture["vectors"]:
+            name = vector["name"]
+            payload = RingEndPayload(**vector["payload"], rts=vector["rts"])
+            self.assertEqual(payload.to_json_bytes(), vector["plaintext"].encode("utf-8"), name)
+            blob = seal(key, kid, payload, base64.b64decode(vector["nonce"]))
+            self.assertEqual(base64.b64encode(blob).decode("ascii"), vector["blob"], name)
+            self.assertEqual(hashlib.sha256(blob).hexdigest(), vector["blob_sha256"], name)
+            self.assertEqual(
+                (len(blob), len(blob) - 37), (vector["blob_length"], vector["padded_length"]), name
+            )
+            self.assertEqual(open_blob(key, blob), (kid, vector["x"], vector["payload"]), name)
+            self.assertEqual(classify(key, kid, vector["blob"]), "ok", name)
 
 
 class SealerTests(unittest.TestCase):

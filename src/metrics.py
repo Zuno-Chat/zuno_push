@@ -16,6 +16,11 @@ RING_LATENCY_SECONDS = Histogram(
     "From the call event's received_ts to Sygnal accepting the ring",
     buckets=(0.25, 0.5, 1, 2, 3, 5, 10, 30),
 )
+RING_ENDS = Counter(
+    "zuno_push_ring_ends_total",
+    "Ring-end pushes to Sygnal by reason and result",
+    ["reason", "result"],
+)
 POLLER_LAG_SECONDS = Histogram(
     "zuno_push_poller_lag_seconds",
     "From the call event's received_ts to the start of rule evaluation",

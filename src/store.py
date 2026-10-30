@@ -80,6 +80,24 @@ class PendingRing:
         return (self.room_id, self.call_id, self.user_id, self.device_id)
 
 
+@dataclass(frozen=True)
+class PendingEnd:
+    room_id: str
+    call_id: str
+    user_id: str
+    device_id: str
+    reason: str
+    received_ts: int
+    app_id: str
+    pushkey: str
+    kid: int
+    voip_key: str
+
+    @property
+    def key(self) -> tuple[str, ...]:
+        return ("end", self.room_id, self.call_id, self.user_id, self.device_id)
+
+
 class PushStore:
     def __init__(self, api: ModuleApi) -> None:
         self._api = api
@@ -319,23 +337,88 @@ class PushStore:
 
         await self._run("touch_call", txn)
 
-    async def end_calls(self, room_id: str, caller: str, keep: Collection[str]) -> None:
+    async def end_calls(self, room_id: str, caller: str, keep: Collection[str]) -> int:
         keep_list = sorted(keep)
 
-        def txn(t: Any) -> None:
+        def txn(t: Any) -> int:
             t.execute(
                 "SELECT call_id FROM zuno_push_calls"
                 " WHERE room_id = ? AND caller = ? AND ended = 0",
                 (room_id, caller),
             )
+            marked = 0
             for (call_id,) in t.fetchall():
                 if call_id not in keep_list:
                     t.execute(
                         "UPDATE zuno_push_calls SET ended = 1 WHERE room_id = ? AND call_id = ?",
                         (room_id, call_id),
                     )
+                    t.execute(
+                        "UPDATE zuno_push_rings SET ending = 'hung_up'"
+                        " WHERE room_id = ? AND call_id = ? AND ending IS NULL",
+                        (room_id, call_id),
+                    )
+                    marked += t.rowcount
+            return marked
 
-        await self._run("end_calls", txn)
+        return await self._run("end_calls", txn)
+
+    async def answer_call(
+        self, room_id: str, call_id: str, user_id: str, device_ids: Collection[str]
+    ) -> int:
+        def txn(t: Any) -> int:
+            for device_id in sorted(set(device_ids)):
+                t.execute(
+                    "UPDATE zuno_push_rings SET ending = 'joined' WHERE room_id = ?"
+                    " AND call_id = ? AND user_id = ? AND device_id = ? AND ending IS NULL",
+                    (room_id, call_id, user_id, device_id),
+                )
+            t.execute(
+                "UPDATE zuno_push_rings SET ending = 'answered_elsewhere'"
+                " WHERE room_id = ? AND call_id = ? AND user_id = ? AND ending IS NULL",
+                (room_id, call_id, user_id),
+            )
+            return t.rowcount
+
+        return await self._run("answer_call", txn)
+
+    async def pending_ends(
+        self, received_after: int, app_ids: Collection[str], limit: int = 500
+    ) -> list[PendingEnd]:
+        apps = sorted(app_ids)
+        if not apps:
+            return []
+        marks = ", ".join("?" for _ in apps)
+
+        def txn(t: Any) -> list[PendingEnd]:
+            t.execute(
+                "SELECT r.room_id, r.call_id, r.user_id, r.device_id, r.ending, c.received_ts,"
+                " d.voip_app_id, d.voip_pushkey, d.kid, d.voip_key"
+                " FROM zuno_push_rings r"
+                " JOIN zuno_push_calls c ON c.room_id = r.room_id AND c.call_id = r.call_id"
+                " JOIN zuno_push_devices d ON d.user_id = r.user_id AND d.device_id = r.device_id"
+                " WHERE r.state = 'sent' AND r.ts >= ?"
+                " AND r.ending IN ('hung_up', 'answered_elsewhere') AND c.received_ts >= ?"
+                f" AND d.voip_pushkey IS NOT NULL AND d.voip_app_id IN ({marks})"
+                " ORDER BY c.received_ts DESC, r.room_id, r.call_id, r.user_id, r.device_id"
+                " LIMIT ?",
+                (received_after, received_after, *apps, limit),
+            )
+            return [PendingEnd(*row[:5], int(row[5]), *row[6:]) for row in t.fetchall()]
+
+        return await self._run("pending_ends", txn)
+
+    async def set_ending(
+        self, room_id: str, call_id: str, user_id: str, device_id: str, ending: str
+    ) -> None:
+        def txn(t: Any) -> None:
+            t.execute(
+                "UPDATE zuno_push_rings SET ending = ?"
+                " WHERE room_id = ? AND call_id = ? AND user_id = ? AND device_id = ?",
+                (ending, room_id, call_id, user_id, device_id),
+            )
+
+        await self._run("set_ending", txn)
 
     async def expire_pending(self, received_before: int, now: int) -> int:
         def txn(t: Any) -> int:
